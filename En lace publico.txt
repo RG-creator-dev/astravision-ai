@@ -1,0 +1,5 @@
+¡Excelente! El túnel quedó activado y funcionando al 100%.
+
+Tu enlace seguro público generado es:
+
+[https://fuji-environments-comes-standards.trycloudflare.com](https://fuji-environments-comes-standards.trycloudflare.com)
