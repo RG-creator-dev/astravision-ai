@@ -4,7 +4,8 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger('astravision')
@@ -14,8 +15,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-latest")
+# Inicialización de clientes con las SDKs modernas
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def obtener_o_crear_usuario(telegram_id: int):
@@ -86,8 +87,16 @@ async def imagen_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Ofrece una lectura mística, esperanzadora, constructiva y estructurada con emoticonos astrológicos."
         )
         
-        image_part = {"mime_type": "image/jpeg", "data": bytes(image_bytes)}
-        response = model.generate_content([prompt, image_part])
+        # Uso correcto del cliente moderno google-genai
+        image_part = types.Part.from_bytes(
+            data=bytes(image_bytes),
+            mime_type="image/jpeg"
+        )
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt, image_part]
+        )
         
         if not db_user["is_premium"]:
             descontar_credito(telegram_id, db_user["credits"])
