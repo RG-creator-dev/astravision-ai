@@ -32,7 +32,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # Cliente de la librería oficial google-genai
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.6-flash"
 
 # ------------------------------------------------------------------
 # 3. Funciones del Bot de Telegram
