@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import logging
 from telegram import Update
@@ -15,11 +15,15 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Inicialización de clientes con las SDKs modernas
+# Inicialización segura
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 def obtener_o_crear_usuario(telegram_id: int):
+    if not supabase:
+        log.warning("Supabase no configurado. Retornando usuario temporal.")
+        return {"telegram_id": telegram_id, "credits": 3, "is_premium": False}
+        
     res = supabase.table("users").select("*").eq("telegram_id", telegram_id).execute()
     if res.data:
         return res.data[0]
@@ -33,6 +37,8 @@ def obtener_o_crear_usuario(telegram_id: int):
     return insert_res.data[0]
 
 def descontar_credito(telegram_id: int, creditos_actuales: int):
+    if not supabase:
+        return
     nuevos_creditos = max(0, creditos_actuales - 1)
     supabase.table("users").update({"credits": nuevos_creditos}).eq("telegram_id", telegram_id).execute()
 
@@ -87,14 +93,14 @@ async def imagen_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Ofrece una lectura mística, esperanzadora, constructiva y estructurada con emoticonos astrológicos."
         )
         
-        # Uso correcto del cliente moderno google-genai
         image_part = types.Part.from_bytes(
             data=bytes(image_bytes),
             mime_type="image/jpeg"
         )
         
+        # Modelo oficial rápido y estable
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=[prompt, image_part]
         )
         
