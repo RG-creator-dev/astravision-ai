@@ -100,7 +100,7 @@ async def imagen_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Modelo oficial rápido y estable
         response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=[prompt, image_part]
         )
         
