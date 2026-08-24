@@ -1,128 +1,93 @@
-# -*- coding: utf-8 -*-
 import os
-import logging
+import io
+import asyncio
+import threading
+from flask import Flask
+from PIL import Image
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from supabase import create_client, Client
 from google import genai
-from google.genai import types
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-log = logging.getLogger('astravision')
+# ------------------------------------------------------------------
+# 1. Servidor Web Mínimo (Mantiene activo Render en el Plan Gratuito)
+# ------------------------------------------------------------------
+web_app = Flask(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+@web_app.route('/')
+def health_check():
+    return "Astravisión AI está activo y funcionando.", 200
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
+# Iniciar servidor web en un hilo secundario
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# ------------------------------------------------------------------
+# 2. Configuración de API Keys y Cliente Gemini
+# ------------------------------------------------------------------
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Inicialización segura
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# Cliente de la librería oficial google-genai
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_NAME = "gemini-2.5-flash"
 
-def obtener_o_crear_usuario(telegram_id: int):
-    if not supabase:
-        log.warning("Supabase no configurado. Retornando usuario temporal.")
-        return {"telegram_id": telegram_id, "credits": 3, "is_premium": False}
-        
-    res = supabase.table("users").select("*").eq("telegram_id", telegram_id).execute()
-    if res.data:
-        return res.data[0]
-    
-    nuevo_usuario = {
-        "telegram_id": telegram_id,
-        "credits": 3,
-        "is_premium": False
-    }
-    insert_res = supabase.table("users").insert(nuevo_usuario).execute()
-    return insert_res.data[0]
-
-def descontar_credito(telegram_id: int, creditos_actuales: int):
-    if not supabase:
-        return
-    nuevos_creditos = max(0, creditos_actuales - 1)
-    supabase.table("users").update({"credits": nuevos_creditos}).eq("telegram_id", telegram_id).execute()
-
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user = obtener_o_crear_usuario(user.id)
-    creditos = "Ilimitados (Premium)" if db_user["is_premium"] else db_user["credits"]
-    
+# ------------------------------------------------------------------
+# 3. Funciones del Bot de Telegram
+# ------------------------------------------------------------------
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"✨ *Bienvenido a Astravisión AI*, {user.first_name}!\n\n"
-        f"🔮 Envía una foto clara de la *palma de tu mano* (Quiromancia) o de los *posos de tu taza de café* (Cafemancia).\n\n"
-        f"📊 *Tus créditos disponibles:* {creditos}\n\n"
-        f"Usa /creditos para consultar tu saldo en cualquier momento.",
-        parse_mode="Markdown"
+        "¡Hola! Soy Astravisión AI. Envíame un texto o una imagen y te responderé de inmediato."
     )
 
-async def creditos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user = obtener_o_crear_usuario(user.id)
-    creditos = "Ilimitados (Premium)" if db_user["is_premium"] else db_user["credits"]
-    
-    await update.message.reply_text(
-        f"📊 *Estado de tu Cuenta - Astravisión*\n\n"
-        f"👤 ID: {user.id}\n"
-        f"🔮 Créditos disponibles: *{creditos}*\n\n"
-        f"Si tus créditos se agotan, pronto podrás adquirir paquetes directamente desde nuestra web.",
-        parse_mode="Markdown"
-    )
-
-async def imagen_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_user.id
-    db_user = obtener_o_crear_usuario(telegram_id)
-    
-    if not db_user["is_premium"] and db_user["credits"] <= 0:
-        await update.message.reply_text(
-            "🔮 *Has agotado tus lecturas gratuitas.*\n\n"
-            "Pronto podrás adquirir más créditos o activar el plan Premium para consultas ilimitadas.",
-            parse_mode="Markdown"
-        )
-        return
-
-    msg_espera = await update.message.reply_text("✨ *Conectando con los astros y analizando la imagen...*", parse_mode="Markdown")
-    
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
     try:
-        photo_file = await update.message.photo[-1].get_file()
-        image_bytes = await photo_file.download_as_bytearray()
-        
-        prompt = (
-            "Eres Astravisión AI, un místico experto en quiromancia y cafemancia. "
-            "Examina detalladamente la imagen adjunta. Si es una mano, interpreta sus líneas principales y montes. "
-            "Si es una taza de café, interpreta los símbolos y patrones formados por los residuos. "
-            "Ofrece una lectura mística, esperanzadora, constructiva y estructurada con emoticonos astrológicos."
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_text
         )
-        
-        image_part = types.Part.from_bytes(
-            data=bytes(image_bytes),
-            mime_type="image/jpeg"
-        )
-        
-        # Modelo oficial rápido y estable
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[prompt, image_part]
-        )
-        
-        if not db_user["is_premium"]:
-            descontar_credito(telegram_id, db_user["credits"])
-            
-        await msg_espera.delete()
-        await update.message.reply_text(response.text, parse_mode="Markdown")
-        
+        await update.message.reply_text(response.text)
     except Exception as e:
-        log.error(f"Error procesando imagen: {e}")
-        await msg_espera.edit_text("❌ Ocurrió un error al interpretar la imagen. Por favor, intenta de nuevo con una foto más clara.")
+        await update.message.reply_text(f"Ocurrió un error al procesar el mensaje: {e}")
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    caption = update.message.caption or "Describe o analiza esta imagen."
+    try:
+        # Descargar la foto enviada por Telegram
+        photo_file = await update.message.photo[-1].get_file()
+        photo_bytes = await photo_file.download_as_bytearray()
+        image = Image.open(io.BytesIO(photo_bytes))
+
+        # Enviar la imagen y el texto a Gemini 2.5 Flash
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[image, caption]
+        )
+        await update.message.reply_text(response.text)
+    except Exception as e:
+        await update.message.reply_text(f"Ocurrió un error al procesar la imagen: {e}")
+
+# ------------------------------------------------------------------
+# 4. Inicialización Principal del Bot
+# ------------------------------------------------------------------
 def main():
+    if not TELEGRAM_BOT_TOKEN:
+        raise ValueError("Falta la variable de entorno TELEGRAM_BOT_TOKEN")
+    if not GEMINI_API_KEY:
+        raise ValueError("Falta la variable de entorno GEMINI_API_KEY")
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("creditos", creditos_handler))
-    app.add_handler(MessageHandler(filters.PHOTO, imagen_handler))
-    
-    log.info("Iniciando Bot Astravisión...")
+
+    # Registradores de comandos y mensajes
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+    print("Bot Astravisión AI iniciado correctamente...")
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
