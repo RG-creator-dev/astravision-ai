@@ -213,10 +213,16 @@ def setup_telegram_bot():
     return telegram_app
 
 if __name__ == '__main__':
+    # Creación e inicialización del event loop de forma compatible con Python 3.10+ / 3.14
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     # Iniciar bot de Telegram en segundo plano
     bot_app = setup_telegram_bot()
     if bot_app:
-        loop = asyncio.get_event_loop()
         loop.create_task(bot_app.initialize())
         loop.create_task(bot_app.start())
         loop.create_task(bot_app.updater.start_polling())
