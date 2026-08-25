@@ -3,6 +3,6 @@ gunicorn
 requests
 python-telegram-bot
 supabase
-google-generativeai
+google-genai
 pillow
 python-dotenv
