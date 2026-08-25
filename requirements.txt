@@ -1,10 +1,8 @@
-fastapi
-uvicorn
-python-telegram-bot
-google-genai
-python-dotenv
+flask
+gunicorn
 requests
-gspread
-google-auth
-pillow
+python-telegram-bot
 supabase
+google-generativeai
+pillow
+python-dotenv
