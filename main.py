@@ -1,6 +1,7 @@
 import os
 import asyncio
 import io
+import threading
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -28,7 +29,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
-CORS(app)  # Permite peticiones de pago desde la web sin bloqueos del navegador
+CORS(app)
 
 def get_or_create_user(telegram_id: int, username: str):
     if not supabase:
@@ -154,27 +155,25 @@ def create_payment_web():
 def nowpayments_webhook():
     return jsonify({"status": "received"}), 200
 
-def setup_telegram_bot():
+def run_telegram_bot():
     if not TELEGRAM_BOT_TOKEN:
-        return None
+        print("⚠️ No hay TELEGRAM_BOT_TOKEN configurado.")
+        return
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
-    return telegram_app
+    
+    print("🤖 Bot de Quiromancia y Cafemancia iniciado en hilo secundario.")
+    telegram_app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # Arrancar el bot de Telegram en un hilo independiente
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
 
-    bot_app = setup_telegram_bot()
-    if bot_app:
-        loop.create_task(bot_app.initialize())
-        loop.create_task(bot_app.start())
-        loop.create_task(bot_app.updater.start_polling())
-        print("🤖 Bot de Quiromancia y Cafemancia iniciado correctamente.")
-
+    # Arrancar el servidor web de Flask
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
