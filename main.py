@@ -155,25 +155,22 @@ def create_payment_web():
 def nowpayments_webhook():
     return jsonify({"status": "received"}), 200
 
-def run_telegram_bot():
-    if not TELEGRAM_BOT_TOKEN:
-        print("⚠️ No hay TELEGRAM_BOT_TOKEN configurado.")
-        return
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
-    
-    print("🤖 Bot de Quiromancia y Cafemancia iniciado en hilo secundario.")
-    telegram_app.run_polling(drop_pending_updates=True)
+def run_flask():
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 if __name__ == '__main__':
-    # Arrancar el bot de Telegram en un hilo independiente
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
+    # 1. Arrancar el servidor Flask (Web / Pagos) en un hilo secundario
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-    # Arrancar el servidor web de Flask
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    # 2. Arrancar el bot de Telegram en el HILO PRINCIPAL
+    if TELEGRAM_BOT_TOKEN:
+        print("🤖 Iniciando Bot de Telegram en el hilo principal...")
+        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        telegram_app.add_handler(CommandHandler("start", start_command))
+        telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
+        telegram_app.run_polling(drop_pending_updates=True, stop_signals=None)
+    else:
+        print("⚠️ TELEGRAM_BOT_TOKEN no configurado.")
+        flask_thread.join()
