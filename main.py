@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 
 # Variables de entorno
@@ -19,9 +19,8 @@ NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
 # Configurar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-# Configurar Gemini API
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Configurar Cliente de Gemini (Librería google-genai)
+client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
 
@@ -48,7 +47,7 @@ def update_user_credits(telegram_id: int, new_credits: int):
             print(f"Error créditos: {e}")
 
 def analizar_lectura(prompt_text: str, image_pil=None) -> str:
-    if not GEMINI_API_KEY:
+    if not client_ai:
         return "El servicio de IA no está configurado (falta GEMINI_API_KEY)."
     
     system_instruction = (
@@ -60,11 +59,14 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
     )
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=system_instruction)
+        contents = [system_instruction, prompt_text]
         if image_pil:
-            response = model.generate_content([prompt_text, image_pil])
-        else:
-            response = model.generate_content(prompt_text)
+            contents.append(image_pil)
+
+        response = client_ai.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+        )
         return response.text
     except Exception as e:
         print(f"Error en Gemini API: {e}")
