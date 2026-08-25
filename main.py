@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
-from google import genai
+import google.generativeai as genai
 from PIL import Image
 
 # Variables de entorno
@@ -15,11 +15,13 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
-NOWPAYMENTS_IPN_SECRET = os.getenv("NOWPAYMENTS_IPN_SECRET")
 
-# Clientes externos
+# Configurar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+# Configurar Gemini API
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 app = Flask(__name__)
 
@@ -46,8 +48,8 @@ def update_user_credits(telegram_id: int, new_credits: int):
             print(f"Error créditos: {e}")
 
 def analizar_lectura(prompt_text: str, image_pil=None) -> str:
-    if not gemini_client:
-        return "El servicio de IA no está disponible en este momento."
+    if not GEMINI_API_KEY:
+        return "El servicio de IA no está configurado (falta GEMINI_API_KEY)."
     
     system_instruction = (
         "Eres AstraVisión AI, una experta mística en Quiromancia (lectura de la palma de la mano) y Cafemancia (lectura del poso de café). "
@@ -58,16 +60,15 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
     )
     
     try:
-        contents = [image_pil, prompt_text] if image_pil else prompt_text
-        response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents,
-            config={'system_instruction': system_instruction}
-        )
+        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=system_instruction)
+        if image_pil:
+            response = model.generate_content([prompt_text, image_pil])
+        else:
+            response = model.generate_content(prompt_text)
         return response.text
     except Exception as e:
         print(f"Error en Gemini API: {e}")
-        return "Las energías místicas están difusas en este momento. Por favor intenta enviar tu imagen nuevamente."
+        return f"Ocurrió un detalle místico al leer la imagen: {str(e)}"
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -124,7 +125,7 @@ def create_payment_web():
     url = "https://api.nowpayments.io/v1/invoice"
     headers = {"x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json"}
     payload = {
-        "price_amount": 1.0,  # Fijado a 1.00 USD
+        "price_amount": 1.0,
         "price_currency": "usd",
         "pay_currency": "usdttrc20",
         "ipn_callback_url": "https://astravision-ai.onrender.com/webhook/nowpayments",
