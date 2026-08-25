@@ -1,18 +1,15 @@
 import os
 import asyncio
-import hmac
-import hashlib
-import json
+import io
 import requests
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 from google import genai
+from PIL import Image
 
-# ==========================================
-# 1. CONFIGURACIÓN Y VARIABLES DE ENTORNO
-# ==========================================
+# Variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -20,17 +17,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
 NOWPAYMENTS_IPN_SECRET = os.getenv("NOWPAYMENTS_IPN_SECRET")
 
-# Inicialización de clientes
+# Clientes externos
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
 
-# ==========================================
-# 2. FUNCIONES DE BASE DE DATOS (SUPABASE)
-# ==========================================
 def get_or_create_user(telegram_id: int, username: str):
-    """Consulta o registra a un usuario en Supabase asignándole lecturas iniciales."""
     if not supabase:
         return {"credits": 3, "is_vip": False}
     try:
@@ -38,119 +31,100 @@ def get_or_create_user(telegram_id: int, username: str):
         if res.data:
             return res.data[0]
         else:
-            new_user = {
-                "telegram_id": telegram_id,
-                "username": username or "Usuario",
-                "credits": 3,
-                "is_vip": False
-            }
+            new_user = {"telegram_id": telegram_id, "username": username or "Usuario", "credits": 3, "is_vip": False}
             inserted = supabase.table("users").insert(new_user).execute()
             return inserted.data[0]
     except Exception as e:
-        print(f"Error en Supabase: {e}")
+        print(f"Error Supabase: {e}")
         return {"credits": 3, "is_vip": False}
 
 def update_user_credits(telegram_id: int, new_credits: int):
-    """Actualiza la cantidad de créditos de un usuario."""
     if supabase:
         try:
             supabase.table("users").update({"credits": new_credits}).eq("telegram_id", telegram_id).execute()
         except Exception as e:
-            print(f"Error al actualizar créditos: {e}")
+            print(f"Error créditos: {e}")
 
-# ==========================================
-# 3. LÓGICA DE GEMINI (INTELIGENCIA ARTIFICIAL)
-# ==========================================
-def generar_respuesta_astrologica(prompt_usuario: str) -> str:
-    """Envía la consulta del usuario a la API de Gemini con rol de astrólogo profesional."""
+def analizar_lectura(prompt_text: str, image_pil=None) -> str:
     if not gemini_client:
-        return "El servicio de Inteligencia Artificial no está configurado actualmente."
+        return "El servicio de IA no está disponible en este momento."
     
     system_instruction = (
-        "Eres AstraVisión AI, una astróloga mística, empática, seria y profesional. "
-        "Respondes preguntas sobre carta astral, tránsito planetario, horóscopo y compatibilidad. "
-        "Tus respuestas son elegantes, claras y estructuradas con emojis relacionados con el cosmos."
+        "Eres AstraVisión AI, una experta mística en Quiromancia (lectura de la palma de la mano) y Cafemancia (lectura del poso de café). "
+        "Si recibes una imagen de una mano, analiza visualmente las líneas (Corazón, Cabeza, Vida, Destino) y montes. "
+        "Si recibes una imagen de una taza de café, analiza las formas y patrones dejados por los residuos. "
+        "Si recibes solo texto, responde desde la perspectiva mística de la quiromancia y cafemancia. "
+        "Estructura tus lecturas con tono sabio, místico, inspirador y empático, usando emojis pertinentes."
     )
     
     try:
+        contents = [image_pil, prompt_text] if image_pil else prompt_text
         response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=prompt_usuario,
+            contents=contents,
             config={'system_instruction': system_instruction}
         )
         return response.text
     except Exception as e:
         print(f"Error en Gemini API: {e}")
-        return "Lo siento, las energías cósmicas están turbias en este momento (Error de procesamiento). Inténtalo más tarde."
+        return "Las energías místicas están difusas en este momento. Por favor intenta enviar tu imagen nuevamente."
 
-# ==========================================
-# 4. COMANDOS Y EVENTOS DE TELEGRAM
-# ==========================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = get_or_create_user(user.id, user.username)
-    
     msg = (
-        f"✨ **¡Bienvenido a AstraVisión AI, {user.first_name}!** ✨\n\n"
-        f"Soy tu guía astrológica impulsada por inteligencia artificial.\n"
-        f"Tienes **{db_user.get('credits', 0)} lecturas disponibles**.\n\n"
-        f"🔮 Escribe tu consulta (ejemplo: *'¿Qué energías me depara el tránsito de Saturno en mi signo?'* o tu fecha y hora de nacimiento)."
+        f"🖐️☕ **¡Bienvenido a AstraVisión AI, {user.first_name}!**\n\n"
+        f"Especialista mística en **Quiromancia** (Lectura de Mano) y **Cafemancia** (Lectura de Café).\n"
+        f"Tienes **{db_user.get('credits', 0)} lecturas gratuitas** disponibles.\n\n"
+        f"📸 **Envía una foto clara de tu palma o de tu taza de café** junto a tu pregunta en el comentario (ej: *'¿Cómo me ves en el amor?'*)."
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_text = update.message.text
     db_user = get_or_create_user(user.id, user.username)
     
     credits = db_user.get("credits", 0)
     is_vip = db_user.get("is_vip", False)
     
     if not is_vip and credits <= 0:
-        await update.message.reply_text(
-            "🔒 **Has agotado tus lecturas gratuitas.**\n\n"
-            "Para continuar consultando, adquiere un paquete de lecturas desde nuestra web o solicita un enlace de pago.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("🔒 Has agotado tus lecturas gratuitas. Adquiere acceso ilimitado en nuestra web para continuar.")
         return
 
-    # Mensaje de espera mientras Gemini genera la respuesta
-    waiting_msg = await update.message.reply_text("🔮 *Consultando la alineación de las estrellas...*", parse_mode="Markdown")
+    waiting_msg = await update.message.reply_text("🔮 *Analizando los trazos místicos y revelando el destino...*", parse_mode="Markdown")
     
-    # Respuesta de IA
-    respuesta = generar_respuesta_astrologica(user_text)
+    image_pil = None
+    prompt_text = "Realiza una lectura detallada enfocada en mi energía actual y las señales reveladas."
+
+    if update.message.photo:
+        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+        photo_bytes = await photo_file.download_as_bytearray()
+        image_pil = Image.open(io.BytesIO(photo_bytes))
+        if update.message.caption:
+            prompt_text = update.message.caption
+    elif update.message.text:
+        prompt_text = update.message.text
+
+    respuesta = analizar_lectura(prompt_text, image_pil)
     
-    # Descontar crédito si no es VIP
     if not is_vip:
         update_user_credits(user.id, credits - 1)
-    
+        
     await waiting_msg.edit_text(respuesta)
 
-# ==========================================
-# 5. ENDPOINTS WEB Y PASARELA NOWPAYMENTS (FLASK)
-# ==========================================
 @app.route('/', methods=['GET'])
 def health_check():
-    """Ruta para mantener activo el servidor en Render."""
-    return jsonify({
-        "status": "online",
-        "service": "AstraVision AI Full Service"
-    }), 200
+    return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
 @app.route('/create-payment-web', methods=['POST'])
 def create_payment_web():
-    """Ruta invocada por el botón de pago en la landing page HTML."""
     if not NOWPAYMENTS_API_KEY:
         return jsonify({"error": "NOWPAYMENTS_API_KEY no configurada"}), 500
 
     url = "https://api.nowpayments.io/v1/invoice"
-    headers = {
-        "x-api-key": NOWPAYMENTS_API_KEY,
-        "Content-Type": "application/json"
-    }
-    
+    headers = {"x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json"}
     payload = {
-        "price_amount": 2.0,  # $2.00 USD
+        "price_amount": 1.0,  # Fijado a 1.00 USD
         "price_currency": "usd",
         "pay_currency": "usdttrc20",
         "ipn_callback_url": "https://astravision-ai.onrender.com/webhook/nowpayments",
@@ -158,7 +132,6 @@ def create_payment_web():
         "success_url": "https://rg-creator-dev.github.io/astravision-ai/?status=success",
         "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/?status=cancel"
     }
-
     try:
         response = requests.post(url, json=payload, headers=headers)
         res_data = response.json()
@@ -170,64 +143,29 @@ def create_payment_web():
 
 @app.route('/webhook/nowpayments', methods=['POST'])
 def nowpayments_webhook():
-    """Recibe y verifica la confirmación automática de NOWPayments con IPN Secret."""
-    request_data = request.get_data()
-    received_sig = request.headers.get('x-nowpayments-sig')
-
-    # Verificación de seguridad mediante Firma IPN (si está configurada)
-    if NOWPAYMENTS_IPN_SECRET and received_sig:
-        try:
-            data_dict = json.loads(request_data)
-            sorted_data = json.dumps(data_dict, sort_keys=True, separators=(',', ':'))
-            h = hmac.new(NOWPAYMENTS_IPN_SECRET.encode('utf-8'), sorted_data.encode('utf-8'), hashlib.sha512)
-            calculated_sig = h.hexdigest()
-            
-            if calculated_sig != received_sig:
-                print("⚠️ Firma IPN no válida recibida en Webhook.")
-                return jsonify({"error": "Invalid signature"}), 400
-        except Exception as e:
-            print(f"Error verificando firma IPN: {e}")
-
-    data = request.get_json() or {}
-    payment_status = data.get('payment_status')
-    
-    if payment_status == 'finished':
-        pay_amount = data.get('price_amount')
-        order_id = data.get('order_id', 'N/A')
-        print(f"✅ ¡Pago verificado en NOWPayments! Orden: {order_id} por ${pay_amount} USD")
-        
     return jsonify({"status": "received"}), 200
 
-# ==========================================
-# 6. INICIALIZACIÓN Y ARRANQUE DEL BOT
-# ==========================================
 def setup_telegram_bot():
-    """Configura la aplicación del Bot de Telegram."""
     if not TELEGRAM_BOT_TOKEN:
-        print("⚠️ No se detectó TELEGRAM_BOT_TOKEN. El bot no se iniciará.")
         return None
-    
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
     return telegram_app
 
 if __name__ == '__main__':
-    # Creación e inicialización del event loop de forma compatible con Python 3.10+ / 3.14
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    # Iniciar bot de Telegram en segundo plano
     bot_app = setup_telegram_bot()
     if bot_app:
         loop.create_task(bot_app.initialize())
         loop.create_task(bot_app.start())
         loop.create_task(bot_app.updater.start_polling())
-        print("🤖 Bot de Telegram iniciado correctamente.")
+        print("🤖 Bot de Quiromancia y Cafemancia iniciado correctamente.")
 
-    # Iniciar servidor Flask en el puerto asignado por Render
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
