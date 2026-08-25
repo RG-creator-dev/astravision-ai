@@ -3,6 +3,7 @@ import asyncio
 import io
 import requests
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
@@ -16,13 +17,18 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
 
-# Configurar Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# Clientes
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Error inicializando Supabase: {e}")
 
-# Configurar Cliente de Gemini (Librería google-genai)
 client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
+CORS(app)  # Permite peticiones de pago desde la web sin bloqueos del navegador
 
 def get_or_create_user(telegram_id: int, username: str):
     if not supabase:
@@ -44,7 +50,7 @@ def update_user_credits(telegram_id: int, new_credits: int):
         try:
             supabase.table("users").update({"credits": new_credits}).eq("telegram_id", telegram_id).execute()
         except Exception as e:
-            print(f"Error créditos: {e}")
+            print(f"Error actualizando créditos: {e}")
 
 def analizar_lectura(prompt_text: str, image_pil=None) -> str:
     if not client_ai:
