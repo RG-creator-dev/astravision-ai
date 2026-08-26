@@ -76,7 +76,7 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
             contents.append(image_pil)
 
         response = client_ai.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.5-pro',
             contents=contents,
         )
         return response.text
