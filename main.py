@@ -1,6 +1,7 @@
 import os
 import io
 import asyncio
+import threading
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -134,7 +135,14 @@ if telegram_app:
 def health_check():
     return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
-# Endpoint Webhook con bucle asíncrono para procesar imágenes sin bloquear
+# Función auxiliar para ejecutar tareas asíncronas en un hilo secundario
+def process_update_in_thread(update):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(telegram_app.process_update(update))
+    loop.close()
+
+# Endpoint Webhook sincrónico de Flask
 @app.route(f'/telegram/<token>', methods=['POST'])
 def telegram_webhook(token):
     if token != TELEGRAM_BOT_TOKEN:
@@ -143,20 +151,13 @@ def telegram_webhook(token):
     data = request.get_json(force=True)
     update = Update.de_json(data, telegram_app.bot)
     
-    # Procesa la actualización de Telegram de forma asíncrona
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.create_task(telegram_app.process_update(update))
+    # Delegar el procesamiento al hilo secundario sin demorar la respuesta de Flask
+    threading.Thread(target=process_update_in_thread, args=(update,)).start()
     
     return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
     if telegram_app:
-        # Inicializar bot e instalar el Webhook
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(telegram_app.initialize())
