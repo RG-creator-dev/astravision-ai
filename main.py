@@ -49,7 +49,7 @@ CORS(app)
 tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
 async def enviar_mensaje_largo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, texto: str):
-    """Envía textos a Telegram dividiéndolos por párrafos si superan los 4000 caracteres."""
+    """Envía textos a Telegram dividiéndolos por párrafos si superan los 3800 caracteres."""
     MAX_LENGTH = 3800
     if len(texto) <= MAX_LENGTH:
         await context.bot.send_message(chat_id=chat_id, text=texto)
@@ -140,7 +140,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model=modelo,
                 contents=[prompt, image]
             )
-            respuesta_texto = response.text
+            
+            # Extracción limpia del texto evitando partes de metadatos o thoughts
+            if response.candidates and response.candidates[0].content.parts:
+                partes = []
+                for p in response.candidates[0].content.parts:
+                    if hasattr(p, 'text') and p.text:
+                        partes.append(p.text)
+                if partes:
+                    respuesta_texto = "".join(partes)
+            
+            if not respuesta_texto and hasattr(response, 'text') and response.text:
+                respuesta_texto = response.text
+
             if respuesta_texto:
                 break
         except Exception as e:
