@@ -1,6 +1,7 @@
 import os
 import io
 import logging
+import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from telegram import Update
@@ -34,7 +35,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 # Inicialización del cliente de Gemini
 client_gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Lista de modelos visión en orden de intento
+# Lista de modelos visión en orden de intento (Configuración exacta con 3.6 Flash)
 MODELOS_VISION_FALLBACK = [
     "gemini-3.6-flash",
     "gemini-1.5-flash",
@@ -145,6 +146,11 @@ if tg_app:
     tg_app.add_handler(CommandHandler("start", start_command))
     tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
+async def procesar_update_seguro(update: Update):
+    """Inicializa la app de Telegram correctamente para evitar RuntimeError."""
+    async with tg_app:
+        await tg_app.process_update(update)
+
 # Rutas Flask
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
@@ -154,8 +160,7 @@ def index():
 def telegram_webhook():
     if request.method == "POST" and tg_app:
         update = Update.de_json(request.get_json(force=True), tg_app.bot)
-        import asyncio
-        asyncio.run(tg_app.process_update(update))
+        asyncio.run(procesar_update_seguro(update))
         return "ok", 200
     return "bad request", 400
 
