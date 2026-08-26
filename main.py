@@ -110,21 +110,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_pil = None
     prompt_text = "Realiza una lectura detallada enfocada en mi energía actual y las señales reveladas."
 
-    if update.message.photo:
-        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
-        photo_bytes = await photo_file.download_as_bytearray()
-        image_pil = Image.open(io.BytesIO(photo_bytes))
-        if update.message.caption:
-            prompt_text = update.message.caption
-    elif update.message.text:
-        prompt_text = update.message.text
+    try:
+        if update.message.photo:
+            photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+            image_bytes = io.BytesIO()
+            await photo_file.download_to_memory(image_bytes)
+            image_bytes.seek(0)
+            image_pil = Image.open(image_bytes)
+            
+            if update.message.caption:
+                prompt_text = update.message.caption
+        elif update.message.text:
+            prompt_text = update.message.text
 
-    respuesta = analizar_lectura(prompt_text, image_pil)
-    
-    if not is_vip:
-        update_user_credits(user.id, credits - 1)
+        respuesta = analizar_lectura(prompt_text, image_pil)
         
-    await waiting_msg.edit_text(respuesta)
+        if not is_vip:
+            update_user_credits(user.id, credits - 1)
+            
+        await waiting_msg.edit_text(respuesta)
+
+    except Exception as e:
+        print(f"Error procesando mensaje/foto: {e}")
+        await waiting_msg.edit_text(f"⚠️ Ocurrió una interrupción al procesar la imagen: {str(e)}")
 
 # Registro de Handlers de Telegram
 if telegram_app:
@@ -151,7 +159,6 @@ def telegram_webhook(token):
     data = request.get_json(force=True)
     update = Update.de_json(data, telegram_app.bot)
     
-    # Delegar el procesamiento al hilo secundario sin demorar la respuesta de Flask
     threading.Thread(target=process_update_in_thread, args=(update,)).start()
     
     return jsonify({"status": "ok"}), 200
