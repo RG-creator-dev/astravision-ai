@@ -1,5 +1,6 @@
 import os
 import io
+import asyncio
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -124,7 +125,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await waiting_msg.edit_text(respuesta)
 
-# Registro de Handlers
+# Registro de Handlers de Telegram
 if telegram_app:
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
@@ -133,19 +134,33 @@ if telegram_app:
 def health_check():
     return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
-# Endpoint exclusivo para recibir eventos de Telegram vía Webhook
+# Endpoint Webhook con bucle asíncrono para procesar imágenes sin bloquear
 @app.route(f'/telegram/<token>', methods=['POST'])
-async def telegram_webhook(token):
+def telegram_webhook(token):
     if token != TELEGRAM_BOT_TOKEN:
         return jsonify({"error": "Unauthorized"}), 403
     
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    await telegram_app.process_update(update)
+    data = request.get_json(force=True)
+    update = Update.de_json(data, telegram_app.bot)
+    
+    # Procesa la actualización de Telegram de forma asíncrona
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    loop.create_task(telegram_app.process_update(update))
+    
     return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
     if telegram_app:
-        # Registrar el webhook en Telegram al iniciar el servicio
+        # Inicializar bot e instalar el Webhook
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(telegram_app.initialize())
+        
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
         print(f"🤖 Webhook registrado exitosamente en: {WEBHOOK_URL}")
 
