@@ -48,26 +48,6 @@ CORS(app)
 # Configuración del Bot de Telegram (vía Webhook)
 tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
-async def enviar_mensaje_largo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, texto: str):
-    """Envía textos a Telegram dividiéndolos por párrafos si superan los 3800 caracteres."""
-    MAX_LENGTH = 3800
-    if len(texto) <= MAX_LENGTH:
-        await context.bot.send_message(chat_id=chat_id, text=texto)
-        return
-
-    lineas = texto.split('\n')
-    bloque_actual = ""
-
-    for linea in lineas:
-        if len(bloque_actual) + len(linea) + 1 > MAX_LENGTH:
-            await context.bot.send_message(chat_id=chat_id, text=bloque_actual)
-            bloque_actual = linea + "\n"
-        else:
-            bloque_actual += linea + "\n"
-
-    if bloque_actual.strip():
-        await context.bot.send_message(chat_id=chat_id, text=bloque_actual)
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "Usuario"
@@ -123,12 +103,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_bytes = await photo_file.download_as_bytearray()
     image = Image.open(io.BytesIO(image_bytes))
 
-    # 3. Prompt optimizado
+    # 3. Prompt de quiromancia
     prompt = (
         "Eres AstraVisión AI, un bot místico experto en quiromancia. Analiza esta imagen de una mano y realiza "
         "una lectura mística detallada, profunda y reveladora sobre el destino, salud, amor y fortuna. "
-        "Usa emojis, tono místico y positivo. Mantén la respuesta por debajo de 2500 caracteres para asegurar "
-        "una lectura clara y completa."
+        "Usa emojis, tono místico y positivo."
     )
 
     # 4. Procesar con Gemini (Fallback de modelos)
@@ -140,19 +119,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model=modelo,
                 contents=[prompt, image]
             )
-            
-            # Extracción limpia del texto evitando partes de metadatos o thoughts
-            if response.candidates and response.candidates[0].content.parts:
-                partes = []
-                for p in response.candidates[0].content.parts:
-                    if hasattr(p, 'text') and p.text:
-                        partes.append(p.text)
-                if partes:
-                    respuesta_texto = "".join(partes)
-            
-            if not respuesta_texto and hasattr(response, 'text') and response.text:
-                respuesta_texto = response.text
-
+            respuesta_texto = response.text
             if respuesta_texto:
                 break
         except Exception as e:
@@ -170,8 +137,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error actualizando créditos: {e}")
 
-    # 6. Enviar mensaje de respuesta (con manejo de longitud)
-    await enviar_mensaje_largo(chat_id, context, respuesta_texto)
+    # 6. Enviar mensaje de respuesta
+    await context.bot.send_message(chat_id=chat_id, text=respuesta_texto)
 
 # Registrar Handlers en el Bot
 if tg_app:
