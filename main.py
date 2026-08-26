@@ -71,7 +71,7 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
 
         # Usamos gemini-2.0-flash para la SDK moderna de google-genai
         response = client_ai.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-3.6-flash',
             contents=contents,
         )
         return response.text
