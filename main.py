@@ -50,10 +50,11 @@ if GEMINI_API_KEY:
 
 # Lista de modelos a intentar en orden. Si el primero no está habilitado
 # en tu proyecto/región, se prueba el siguiente automáticamente.
+# Lista de modelos a intentar en orden.
 MODELOS_VISION_FALLBACK = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash-001",
-    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.5-flash"
 ]
 
 app = Flask(__name__)
