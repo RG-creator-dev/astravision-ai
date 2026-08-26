@@ -32,8 +32,9 @@ client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 app = Flask(__name__)
 CORS(app)
 
-# Inicialización de la aplicación de Telegram
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
+# Globales para gestión de ciclo de eventos asíncrono
+main_loop = None
+telegram_app = None
 
 def get_or_create_user(telegram_id: int, username: str):
     if not supabase:
@@ -134,23 +135,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Error procesando mensaje/foto: {e}")
         await waiting_msg.edit_text(f"⚠️ Ocurrió una interrupción al procesar la imagen: {str(e)}")
 
-# Registro de Handlers de Telegram
-if telegram_app:
+# Hilo dedicado para el Event Loop de asyncio
+def start_asyncio_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+def init_telegram():
+    global main_loop, telegram_app
+    if not TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN no configurado.")
+        return
+
+    main_loop = asyncio.new_event_loop()
+    t = threading.Thread(target=start_asyncio_loop, args=(main_loop,), daemon=True)
+    t.start()
+
+    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
+
+    # Inicializar Telegram dentro del loop persistente
+    asyncio.run_coroutine_threadsafe(telegram_app.initialize(), main_loop).result()
+    
+    # Registrar el webhook
+    try:
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
+        print(f"🤖 Webhook registrado exitosamente en: {WEBHOOK_URL}")
+    except Exception as e:
+        print(f"Error registrando Webhook: {e}")
+
+# Inicializar Telegram antes de Flask
+init_telegram()
 
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
-# Función auxiliar para ejecutar tareas asíncronas en un hilo secundario
-def process_update_in_thread(update):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.process_update(update))
-    loop.close()
-
-# Endpoint Webhook sincrónico de Flask
 @app.route(f'/telegram/<token>', methods=['POST'])
 def telegram_webhook(token):
     if token != TELEGRAM_BOT_TOKEN:
@@ -159,18 +179,11 @@ def telegram_webhook(token):
     data = request.get_json(force=True)
     update = Update.de_json(data, telegram_app.bot)
     
-    threading.Thread(target=process_update_in_thread, args=(update,)).start()
+    # Enviar la tarea al event loop único en ejecucion permanente
+    asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), main_loop)
     
     return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
-    if telegram_app:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(telegram_app.initialize())
-        
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
-        print(f"🤖 Webhook registrado exitosamente en: {WEBHOOK_URL}")
-
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
