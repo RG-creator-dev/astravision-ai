@@ -1,8 +1,7 @@
 import os
 import io
-import threading
 import requests
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -16,6 +15,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
+WEBHOOK_URL = f"https://astravision-ai.onrender.com/telegram/{TELEGRAM_BOT_TOKEN}"
 
 # Clientes
 supabase: Client = None
@@ -29,6 +29,9 @@ client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
 CORS(app)
+
+# Inicialización de la aplicación de Telegram
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
 def get_or_create_user(telegram_id: int, username: str):
     if not supabase:
@@ -69,9 +72,8 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
         if image_pil:
             contents.append(image_pil)
 
-        # Usamos gemini-2.0-flash para la SDK moderna de google-genai
         response = client_ai.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.0-flash',
             contents=contents,
         )
         return response.text
@@ -122,31 +124,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await waiting_msg.edit_text(respuesta)
 
+# Registro de Handlers
+if telegram_app:
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
+
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
-def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+# Endpoint exclusivo para recibir eventos de Telegram vía Webhook
+@app.route(f'/telegram/<token>', methods=['POST'])
+async def telegram_webhook(token):
+    if token != TELEGRAM_BOT_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    await telegram_app.process_update(update)
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    if telegram_app:
+        # Registrar el webhook en Telegram al iniciar el servicio
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
+        print(f"🤖 Webhook registrado exitosamente en: {WEBHOOK_URL}")
 
-    if TELEGRAM_BOT_TOKEN:
-        print("🤖 Forzando cierre de conexiones previas en Telegram...")
-        try:
-            requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
-        except Exception as e:
-            print(f"Error al limpiar webhook: {e}")
-
-        print("🤖 Iniciando Bot de Telegram...")
-        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        telegram_app.add_handler(CommandHandler("start", start_command))
-        telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
-        
-        telegram_app.run_polling(drop_pending_updates=True, stop_signals=None)
-    else:
-        print("⚠️ TELEGRAM_BOT_TOKEN no configurado.")
-        flask_thread.join()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
