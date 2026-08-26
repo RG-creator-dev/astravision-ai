@@ -1,9 +1,8 @@
 import os
-import asyncio
 import io
 import threading
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -70,7 +69,7 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
         if image_pil:
             contents.append(image_pil)
 
-        # En la SDK google-genai, el modelo oficial estándar para visión es gemini-2.0-flash
+        # Usamos gemini-2.0-flash para la SDK moderna de google-genai
         response = client_ai.models.generate_content(
             model='gemini-2.0-flash',
             contents=contents,
@@ -127,47 +126,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def health_check():
     return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
 
-@app.route('/create-payment-web', methods=['POST'])
-def create_payment_web():
-    if not NOWPAYMENTS_API_KEY:
-        return jsonify({"error": "NOWPAYMENTS_API_KEY no configurada"}), 500
-
-    url = "https://api.nowpayments.io/v1/invoice"
-    headers = {"x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "price_amount": 1.0,
-        "price_currency": "usd",
-        "pay_currency": "usdttrc20",
-        "ipn_callback_url": "https://astravision-ai.onrender.com/webhook/nowpayments",
-        "order_description": "Acceso Ilimitado AstraVisión AI",
-        "success_url": "https://rg-creator-dev.github.io/astravision-ai/?status=success",
-        "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/?status=cancel"
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        res_data = response.json()
-        if response.status_code in [200, 201]:
-            return jsonify({"invoice_url": res_data.get("invoice_url")}), 200
-        return jsonify({"error": "No se pudo generar la factura", "details": res_data}), response.status_code
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/webhook/nowpayments', methods=['POST'])
-def nowpayments_webhook():
-    return jsonify({"status": "received"}), 200
-
 def run_flask():
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 if __name__ == '__main__':
-    # 1. Arrancar Flask
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # 2. Arrancar Telegram forzando cierre de conexiones anteriores
     if TELEGRAM_BOT_TOKEN:
-        print("🤖 Forzando cierre de conexiones previas de Telegram...")
+        print("🤖 Forzando cierre de conexiones previas en Telegram...")
         try:
             requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
         except Exception as e:
