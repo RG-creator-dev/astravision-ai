@@ -1,367 +1,198 @@
 import os
 import io
-import asyncio
-import threading
-import requests
+import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 from google import genai
-from google.genai import types as genai_types
+from google.genai import types
 from PIL import Image
 
-# ============================================================
-# VARIABLES DE ENTORNO
-# ============================================================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
-NOWPAYMENTS_IPN_SECRET = os.getenv("NOWPAYMENTS_IPN_SECRET")  # necesario para validar el webhook de pago
-WEBHOOK_URL = f"https://astravision-ai.onrender.com/telegram/{TELEGRAM_BOT_TOKEN}"
+# Configuración de Logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Orígenes permitidos para CORS (solo tu web, no "*", ya que hay un endpoint de pagos)
-ALLOWED_ORIGINS = [
-    "https://rg-creator-dev.github.io",
-]
+# Cargar Variables de Entorno
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY")
+NOWPAYMENTS_IPN_SECRET = os.environ.get("NOWPAYMENTS_IPN_SECRET")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# ============================================================
-# CLIENTES
-# ============================================================
+# Inicialización de Supabase
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase inicializado correctamente.")
     except Exception as e:
-        print(f"Error inicializando Supabase: {e}")
+        logger.error(f"Error inicializando Supabase: {e}")
 
-# IMPORTANTE: se fuerza api_version="v1" (estable) en vez del "v1beta" que
-# el SDK usa por defecto. El v1beta es donde ocurren la mayoría de los 404
-# de modelos que "sí existen" según ListModels.
-client_ai = None
-if GEMINI_API_KEY:
-    client_ai = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options=genai_types.HttpOptions(api_version="v1"),
-    )
+# Inicialización del cliente de Gemini
+client_gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Lista de modelos a intentar en orden. Si el primero no está habilitado
-# en tu proyecto/región, se prueba el siguiente automáticamente.
-# Lista de modelos a intentar en orden.
+# Lista de modelos visión en orden de intento
 MODELOS_VISION_FALLBACK = [
     "gemini-3.6-flash",
     "gemini-1.5-flash",
     "gemini-1.5-pro"
 ]
 
+# Inicialización de Flask
 app = Flask(__name__)
-CORS(app, resources={r"/create_payment": {"origins": ALLOWED_ORIGINS},
-                      r"/payment_webhook": {"origins": "*"}})
+CORS(app)
 
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
+# Configuración del Bot de Telegram (vía Webhook)
+tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
-
-# ============================================================
-# SUPABASE: USUARIOS Y CRÉDITOS
-# ============================================================
-
-def get_or_create_user(telegram_id: int, username: str):
-    if not supabase:
-        return {"credits": 3, "is_vip": False}
-    try:
-        res = supabase.table("users").select("*").eq("telegram_id", telegram_id).execute()
-        if res.data:
-            return res.data[0]
-        new_user = {"telegram_id": telegram_id, "username": username or "Usuario",
-                     "credits": 3, "is_vip": False}
-        inserted = supabase.table("users").insert(new_user).execute()
-        return inserted.data[0]
-    except Exception as e:
-        print(f"Error Supabase: {e}")
-        return {"credits": 3, "is_vip": False}
-
-
-def update_user_credits(telegram_id: int, new_credits: int):
-    if supabase:
-        try:
-            supabase.table("users").update({"credits": new_credits}).eq("telegram_id", telegram_id).execute()
-        except Exception as e:
-            print(f"Error actualizando créditos: {e}")
-
-
-def set_user_vip(telegram_id: int, is_vip: bool = True):
-    """Se usará desde el webhook de confirmación de pago (ver sección 4)."""
-    if supabase:
-        try:
-            supabase.table("users").update({"is_vip": is_vip}).eq("telegram_id", telegram_id).execute()
-        except Exception as e:
-            print(f"Error actualizando estatus VIP: {e}")
-
-
-# ============================================================
-# 1. GEMINI VISION: modelo versionado + fallback + API v1
-# ============================================================
-
-def analizar_lectura(prompt_text: str, image_pil=None) -> str:
-    if not client_ai:
-        return "El servicio de IA no está configurado (falta GEMINI_API_KEY)."
-
-    system_instruction = (
-        "Eres AstraVisión AI, una experta mística en Quiromancia (lectura de la palma de la mano) "
-        "y Cafemancia (lectura del poso de café). "
-        "Si recibes una imagen de una mano, analiza visualmente las líneas (Corazón, Cabeza, Vida, Destino) "
-        "y montes. Si recibes una imagen de una taza de café, analiza las formas y patrones dejados por "
-        "los residuos. Si recibes solo texto, responde desde la perspectiva mística de la quiromancia y "
-        "cafemancia. Estructura tus lecturas con tono sabio, místico, inspirador y empático, usando "
-        "emojis pertinentes."
-    )
-
-    contents = [prompt_text]
-    if image_pil:
-        contents.append(image_pil)
-
-    ultimo_error = None
-    for modelo in MODELOS_VISION_FALLBACK:
-        try:
-            response = client_ai.models.generate_content(
-                model=modelo,
-                contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                ),
-            )
-            return response.text
-        except Exception as e:
-            ultimo_error = e
-            print(f"Modelo '{modelo}' falló, probando el siguiente. Detalle: {e}")
-            continue
-
-    print(f"Error en Gemini API (todos los modelos fallaron): {ultimo_error}")
-    return f"Ocurrió un detalle místico al leer la imagen: {ultimo_error}"
-
-
-# ============================================================
-# HANDLERS DE TELEGRAM
-# ============================================================
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user = get_or_create_user(user.id, user.username)
-    msg = (
-        f"🖐️☕ **¡Bienvenido a AstraVisión AI, {user.first_name}!**\n\n"
-        f"Especialista mística en **Quiromancia** (Lectura de Mano) y **Cafemancia** (Lectura de Café).\n"
-        f"Tienes **{db_user.get('credits', 0)} lecturas gratuitas** disponibles.\n\n"
-        f"📸 **Envía una foto clara de tu palma o de tu taza de café** junto a tu pregunta en el "
-        f"comentario (ej: *'¿Cómo me ves en el amor?'*)."
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user = get_or_create_user(user.id, user.username)
-
-    credits = db_user.get("credits", 0)
-    is_vip = db_user.get("is_vip", False)
-
-    if not is_vip and credits <= 0:
-        await update.message.reply_text(
-            "🔒 Has agotado tus lecturas gratuitas. Adquiere acceso ilimitado en nuestra web para continuar."
-        )
+async def enviar_mensaje_largo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, texto: str):
+    """Envía textos a Telegram dividiéndolos por párrafos si superan los 4000 caracteres."""
+    MAX_LENGTH = 3800
+    if len(texto) <= MAX_LENGTH:
+        await context.bot.send_message(chat_id=chat_id, text=texto)
         return
 
-    waiting_msg = await update.message.reply_text(
-        "🔮 *Analizando los trazos místicos y revelando el destino...*", parse_mode="Markdown"
+    lineas = texto.split('\n')
+    bloque_actual = ""
+
+    for linea in lineas:
+        if len(bloque_actual) + len(linea) + 1 > MAX_LENGTH:
+            await context.bot.send_message(chat_id=chat_id, text=bloque_actual)
+            bloque_actual = linea + "\n"
+        else:
+            bloque_actual += linea + "\n"
+
+    if bloque_actual.strip():
+        await context.bot.send_message(chat_id=chat_id, text=bloque_actual)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    first_name = update.effective_user.first_name or "Usuario"
+
+    # Registrar usuario en Supabase si no existe
+    if supabase:
+        try:
+            res = supabase.table("users").select("*").eq("telegram_id", str(user_id)).execute()
+            if not res.data:
+                supabase.table("users").insert({
+                    "telegram_id": str(user_id),
+                    "credits": 1,  # 1 lectura gratuita de bienvenida
+                    "is_premium": False
+                }).execute()
+        except Exception as e:
+            logger.error(f"Error en Supabase start: {e}")
+
+    mensaje = f"✨ ¡Bienvenido a AstraVisión AI, {first_name}! ✨\n\nEnvíame una fotografía clara de la palma de tu mano y revelaré las líneas de tu destino."
+    await update.message.reply_text(mensaje)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    # 1. Verificar créditos en Supabase
+    user_data = None
+    if supabase:
+        try:
+            res = supabase.table("users").select("*").eq("telegram_id", str(user_id)).execute()
+            if res.data:
+                user_data = res.data[0]
+            else:
+                # Crear si no existía
+                insert_res = supabase.table("users").insert({
+                    "telegram_id": str(user_id),
+                    "credits": 1,
+                    "is_premium": False
+                }).execute()
+                user_data = insert_res.data[0]
+        except Exception as e:
+            logger.error(f"Error consultando usuario: {e}")
+
+    creditos = user_data.get("credits", 0) if user_data else 0
+
+    if creditos <= 0:
+        await update.message.reply_text("⛔ Has agotado tus lecturas disponibles.\n\nAdquiere acceso ilimitado o recarga créditos en nuestra web para continuar.")
+        return
+
+    await update.message.reply_text("🔮 *Analizando los trazos místicos de tu mano...*", parse_mode="Markdown")
+
+    # 2. Descargar la imagen enviada por Telegram
+    photo_file = await update.message.photo[-1].get_file()
+    image_bytes = await photo_file.download_as_bytearray()
+    image = Image.open(io.BytesIO(image_bytes))
+
+    # 3. Prompt optimizado
+    prompt = (
+        "Eres AstraVisión AI, un bot místico experto en quiromancia. Analiza esta imagen de una mano y realiza "
+        "una lectura mística detallada, profunda y reveladora sobre el destino, salud, amor y fortuna. "
+        "Usa emojis, tono místico y positivo. Mantén la respuesta por debajo de 2500 caracteres para asegurar "
+        "una lectura clara y completa."
     )
 
-    image_pil = None
-    prompt_text = "Realiza una lectura detallada enfocada en mi energía actual y las señales reveladas."
-
-    try:
-        if update.message.photo:
-            photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
-            image_bytes = io.BytesIO()
-            await photo_file.download_to_memory(image_bytes)
-            image_bytes.seek(0)
-            image_pil = Image.open(image_bytes)
-            if update.message.caption:
-                prompt_text = update.message.caption
-        elif update.message.text:
-            prompt_text = update.message.text
-
-        # analizar_lectura es una llamada de red síncrona (bloqueante). La
-        # sacamos del hilo del event loop para no congelar el procesamiento
-        # de otros updates mientras Gemini responde.
-        respuesta = await asyncio.to_thread(analizar_lectura, prompt_text, image_pil)
-
-        if not is_vip:
-            update_user_credits(user.id, credits - 1)
-
-        await waiting_msg.edit_text(respuesta)
-
-    except Exception as e:
-        print(f"Error procesando mensaje/foto: {e}")
-        await waiting_msg.edit_text(f"⚠️ Ocurrió una interrupción al procesar la imagen: {str(e)}")
-
-
-if telegram_app:
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
-
-
-# ============================================================
-# 2. EVENT LOOP PERSISTENTE (corrige "Event loop is closed")
-# ============================================================
-# En vez de crear y destruir un event loop nuevo con asyncio.run() en cada
-# webhook (lo cual rompe los clientes HTTP internos de python-telegram-bot,
-# que quedan atados al loop en el que fueron creados), se crea UN SOLO loop
-# de fondo al arrancar la app, y cada update se agenda ahí con
-# run_coroutine_threadsafe. Flask sigue siendo síncrono y responde de
-# inmediato a Telegram.
-
-_bg_loop = asyncio.new_event_loop()
-
-
-def _run_bg_loop():
-    asyncio.set_event_loop(_bg_loop)
-    _bg_loop.run_forever()
-
-
-_bg_thread = threading.Thread(target=_run_bg_loop, daemon=True)
-_bg_thread.start()
-
-
-def _init_telegram_app():
-    async def _init():
-        await telegram_app.initialize()
-        await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-        print(f"🤖 Webhook registrado exitosamente en: {WEBHOOK_URL}")
-
-    fut = asyncio.run_coroutine_threadsafe(_init(), _bg_loop)
-    fut.result(timeout=30)
-
-
-if telegram_app:
-    _init_telegram_app()
-
-
-# ============================================================
-# RUTAS FLASK
-# ============================================================
-
-@app.route('/', methods=['GET'])
-def health_check():
-    return jsonify({"status": "online", "service": "AstraVision Quiromancia y Cafemancia"}), 200
-
-
-@app.route(f'/telegram/<token>', methods=['POST'])
-def telegram_webhook(token):
-    if token != TELEGRAM_BOT_TOKEN:
-        return jsonify({"error": "Unauthorized"}), 403
-
-    data = request.get_json(force=True)
-    update = Update.de_json(data, telegram_app.bot)
-
-    # Se agenda en el loop persistente en vez de crear uno nuevo por request.
-    asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), _bg_loop)
-
-    return jsonify({"status": "ok"}), 200
-
-
-# ============================================================
-# 3. ENDPOINT DE PAGOS — NOWPayments (creación de invoice)
-# ============================================================
-
-@app.route('/create_payment', methods=['POST'])
-def create_payment():
-    if not NOWPAYMENTS_API_KEY:
-        return jsonify({"error": "NOWPayments no configurado"}), 500
-
-    body = request.get_json(silent=True) or {}
-    telegram_id = body.get("telegram_id")  # opcional: para asociar el pago a un usuario
-
-    url = "https://api.nowpayments.io/v1/invoice"
-    headers = {
-        "x-api-key": NOWPAYMENTS_API_KEY,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "price_amount": 1.00,
-        "price_currency": "usd",
-        "order_description": "Acceso Ilimitado AstraVisión AI",
-        "success_url": "https://rg-creator-dev.github.io/astravision-ai/?status=success",
-        "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/?status=cancel",
-        "ipn_callback_url": "https://astravision-ai.onrender.com/payment_webhook",
-    }
-    if telegram_id:
-        # order_id permite recuperar a qué usuario corresponde el pago
-        # cuando llegue la confirmación por IPN.
-        payload["order_id"] = str(telegram_id)
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        return jsonify({"invoice_url": data.get("invoice_url")}), 200
-    except requests.exceptions.RequestException as e:
-        print(f"Error creando invoice en NOWPayments: {e}")
-        return jsonify({"error": "No se pudo crear el pago"}), 502
-
-
-# ============================================================
-# 4. WEBHOOK DE CONFIRMACIÓN (IPN) — necesario para activar el VIP
-# ============================================================
-# create_payment SOLO genera el link de cobro. Sin este webhook, el usuario
-# puede pagar y jamás recibir el acceso ilimitado, porque nadie le avisa al
-# backend que el pago se completó. NOWPayments llama a esta ruta cuando el
-# estado del pago cambia (ej. a "finished").
-
-import hmac
-import hashlib
-import json
-
-
-def _verificar_firma_ipn(raw_body: bytes, signature_header: str) -> bool:
-    if not NOWPAYMENTS_IPN_SECRET or not signature_header:
-        return False
-    # NOWPayments firma el JSON con las claves ordenadas alfabéticamente
-    payload = json.loads(raw_body)
-    ordenado = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    firma_calculada = hmac.new(
-        NOWPAYMENTS_IPN_SECRET.encode(), ordenado.encode(), hashlib.sha512
-    ).hexdigest()
-    return hmac.compare_digest(firma_calculada, signature_header)
-
-
-@app.route('/payment_webhook', methods=['POST'])
-def payment_webhook():
-    signature = request.headers.get("x-nowpayments-sig", "")
-    raw_body = request.get_data()
-
-    if not _verificar_firma_ipn(raw_body, signature):
-        return jsonify({"error": "Firma inválida"}), 403
-
-    data = request.get_json(force=True)
-    estado = data.get("payment_status")
-    order_id = data.get("order_id")  # telegram_id que enviamos en create_payment
-
-    if estado == "finished" and order_id:
+    # 4. Procesar con Gemini (Fallback de modelos)
+    respuesta_texto = None
+    for modelo in MODELOS_VISION_FALLBACK:
         try:
-            set_user_vip(int(order_id), True)
-            print(f"✅ Usuario {order_id} activado como VIP tras pago confirmado.")
-        except ValueError:
-            print(f"order_id inválido recibido en IPN: {order_id}")
+            logger.info(f"Intentando generar lectura con modelo: {modelo}")
+            response = client_gemini.models.generate_content(
+                model=modelo,
+                contents=[prompt, image]
+            )
+            respuesta_texto = response.text
+            if respuesta_texto:
+                break
+        except Exception as e:
+            logger.warning(f"Fallo modelo {modelo}: {e}")
 
-    return jsonify({"status": "received"}), 200
+    if not respuesta_texto:
+        await update.message.reply_text("⚠️ Ocurrió una interrupción al conectar con los oráculos cósmicos. Intenta nuevamente en unos instantes.")
+        return
 
+    # 5. Descontar crédito en Supabase
+    if supabase and user_data:
+        try:
+            nuevos_creditos = max(0, creditos - 1)
+            supabase.table("users").update({"credits": nuevos_creditos}).eq("telegram_id", str(user_id)).execute()
+        except Exception as e:
+            logger.error(f"Error actualizando créditos: {e}")
 
-# ============================================================
-# MAIN
-# ============================================================
+    # 6. Enviar mensaje de respuesta (con manejo de longitud)
+    await enviar_mensaje_largo(chat_id, context, respuesta_texto)
+
+# Registrar Handlers en el Bot
+if tg_app:
+    tg_app.add_handler(CommandHandler("start", start_command))
+    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+# Rutas Flask
+@app.route('/', methods=['GET', 'HEAD'])
+def index():
+    return "Servidor AstraVisión AI Activo y Running", 200
+
+@app.route(f'/telegram/{TELEGRAM_BOT_TOKEN}', methods=['POST'])
+def telegram_webhook():
+    if request.method == "POST" and tg_app:
+        update = Update.de_json(request.get_json(force=True), tg_app.bot)
+        import asyncio
+        asyncio.run(tg_app.process_update(update))
+        return "ok", 200
+    return "bad request", 400
+
+# Endpoint para registrar Webhook al iniciar
+def setup_webhook():
+    if TELEGRAM_BOT_TOKEN:
+        import requests
+        webhook_url = f"https://astravision-ai.onrender.com/telegram/{TELEGRAM_BOT_TOKEN}"
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={webhook_url}"
+        r = requests.get(url)
+        if r.status_code == 200:
+            logger.info(f"🤖 Webhook registrado exitosamente en: {webhook_url}")
+        else:
+            logger.error(f"Fallo al registrar webhook: {r.text}")
 
 if __name__ == '__main__':
+    setup_webhook()
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+    app.run(host='0.0.0.0', port=port)
