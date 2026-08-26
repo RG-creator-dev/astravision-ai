@@ -2,6 +2,7 @@ import os
 import io
 import logging
 import asyncio
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from telegram import Update
@@ -35,7 +36,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 # Inicialización del cliente de Gemini
 client_gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Lista de modelos visión en orden de intento (Configuración exacta con 3.6 Flash)
+# Lista de modelos visión en orden de intento
 MODELOS_VISION_FALLBACK = [
     "gemini-3.6-flash",
     "gemini-1.5-flash",
@@ -53,14 +54,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "Usuario"
 
-    # Registrar usuario en Supabase si no existe
     if supabase:
         try:
             res = supabase.table("users").select("*").eq("telegram_id", str(user_id)).execute()
             if not res.data:
                 supabase.table("users").insert({
                     "telegram_id": str(user_id),
-                    "credits": 1,  # 1 lectura gratuita de bienvenida
+                    "credits": 1,
                     "is_premium": False
                 }).execute()
         except Exception as e:
@@ -73,7 +73,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # 1. Verificar créditos en Supabase
     user_data = None
     if supabase:
         try:
@@ -81,7 +80,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res.data:
                 user_data = res.data[0]
             else:
-                # Crear si no existía
                 insert_res = supabase.table("users").insert({
                     "telegram_id": str(user_id),
                     "credits": 1,
@@ -99,19 +97,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔮 *Analizando los trazos místicos de tu mano...*", parse_mode="Markdown")
 
-    # 2. Descargar la imagen enviada por Telegram
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
     image = Image.open(io.BytesIO(image_bytes))
 
-    # 3. Prompt de quiromancia
     prompt = (
         "Eres AstraVisión AI, un bot místico experto en quiromancia. Analiza esta imagen de una mano y realiza "
         "una lectura mística detallada, profunda y reveladora sobre el destino, salud, amor y fortuna. "
         "Usa emojis, tono místico y positivo."
     )
 
-    # 4. Procesar con Gemini (Fallback de modelos)
     respuesta_texto = None
     for modelo in MODELOS_VISION_FALLBACK:
         try:
@@ -130,7 +125,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Ocurrió una interrupción al conectar con los oráculos cósmicos. Intenta nuevamente en unos instantes.")
         return
 
-    # 5. Descontar crédito en Supabase
     if supabase and user_data:
         try:
             nuevos_creditos = max(0, creditos - 1)
@@ -138,16 +132,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error actualizando créditos: {e}")
 
-    # 6. Enviar mensaje de respuesta
     await context.bot.send_message(chat_id=chat_id, text=respuesta_texto)
 
-# Registrar Handlers en el Bot
 if tg_app:
     tg_app.add_handler(CommandHandler("start", start_command))
     tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
 async def procesar_update_seguro(update: Update):
-    """Inicializa la app de Telegram correctamente para evitar RuntimeError."""
     async with tg_app:
         await tg_app.process_update(update)
 
@@ -164,10 +155,41 @@ def telegram_webhook():
         return "ok", 200
     return "bad request", 400
 
-# Endpoint para registrar Webhook al iniciar
+# Ruta para la pasarela de pago en la web
+@app.route('/create-payment-web', methods=['POST'])
+def create_payment_web():
+    if not NOWPAYMENTS_API_KEY:
+        return jsonify({"error": "NOWPayments API Key no configurada"}), 500
+        
+    url = "https://api.nowpayments.io/v1/invoice"
+    headers = {
+        "x-api-key": NOWPAYMENTS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "price_amount": 1.00,
+        "price_currency": "usd",
+        "pay_currency": "usdttrc20",
+        "order_description": "AstraVisión AI - Acceso Ilimitado",
+        "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
+        "success_url": "https://t.me/astravision_ai_bot",
+        "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/"
+    }
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code in [200, 201]:
+            data = res.json()
+            return jsonify({"invoice_url": data.get("invoice_url")}), 200
+        else:
+            logger.error(f"Error creando factura NOWPayments: {res.text}")
+            return jsonify({"error": "No se pudo generar la factura"}), 500
+    except Exception as e:
+        logger.error(f"Excepción en create_payment_web: {e}")
+        return jsonify({"error": "Error de conexión"}), 500
+
 def setup_webhook():
     if TELEGRAM_BOT_TOKEN:
-        import requests
         webhook_url = f"https://astravision-ai.onrender.com/telegram/{TELEGRAM_BOT_TOKEN}"
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={webhook_url}"
         r = requests.get(url)
