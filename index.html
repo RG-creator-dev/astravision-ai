@@ -111,7 +111,7 @@
             </div>
         </div>
 
-        <a href="https://t.me/AstraVisionAIBot" class="btn btn-telegram" target="_blank">🤖 Probar Bot en Telegram</a>
+        <a href="https://t.me/astravision_ai_bot" class="btn btn-telegram" target="_blank">🤖 Probar Bot en Telegram</a>
         <button onclick="realizarPago()" class="btn btn-pay">💳 Acceso Ilimitado ($1.00 USDT)</button>
     </div>
 
@@ -119,6 +119,12 @@
         async function realizarPago() {
             try {
                 const response = await fetch('https://astravision-ai.onrender.com/create-payment-web', { method: 'POST' });
+                
+                if (!response.ok) {
+                    alert('El módulo de pagos vía NOWPayments está en mantenimiento. Puedes usar la versión gratuita en Telegram.');
+                    return;
+                }
+
                 const data = await response.json();
                 if (data.invoice_url) {
                     window.location.href = data.invoice_url;
@@ -126,7 +132,7 @@
                     alert('Error al generar la orden de pago. Intenta nuevamente.');
                 }
             } catch (e) {
-                alert('No se pudo conectar con el servidor de pago.');
+                alert('El módulo de pagos vía NOWPayments está en mantenimiento. Puedes probar el bot directamente en Telegram.');
             }
         }
     </script>
