@@ -160,16 +160,23 @@ def run_flask():
     app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 if __name__ == '__main__':
-    # 1. Arrancar el servidor Flask (Web / Pagos) en un hilo secundario
+    # 1. Arrancar Flask
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # 2. Arrancar el bot de Telegram en el HILO PRINCIPAL
+    # 2. Arrancar Telegram forzando cierre de conexiones anteriores
     if TELEGRAM_BOT_TOKEN:
-        print("🤖 Iniciando Bot de Telegram en el hilo principal...")
+        print("🤖 Forzando cierre de conexiones previas de Telegram...")
+        try:
+            requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
+        except Exception as e:
+            print(f"Error al limpiar webhook: {e}")
+
+        print("🤖 Iniciando Bot de Telegram...")
         telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         telegram_app.add_handler(CommandHandler("start", start_command))
         telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_message))
+        
         telegram_app.run_polling(drop_pending_updates=True, stop_signals=None)
     else:
         print("⚠️ TELEGRAM_BOT_TOKEN no configurado.")
