@@ -70,8 +70,9 @@ def analizar_lectura(prompt_text: str, image_pil=None) -> str:
         if image_pil:
             contents.append(image_pil)
 
+        # En la SDK google-genai, el modelo oficial estándar para visión es gemini-2.0-flash
         response = client_ai.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=contents,
         )
         return response.text
