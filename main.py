@@ -169,7 +169,7 @@ def create_payment_web():
     payload = {
         "price_amount": 5.00,
         "price_currency": "usd",
-        "fixed_rate": False,
+        "is_fixed_rate": False,
         "order_description": "AstraVisión AI - Acceso Ilimitado",
         "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
         "success_url": "https://t.me/astravision_ai_bot",
