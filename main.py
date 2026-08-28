@@ -167,7 +167,7 @@ def create_payment_web():
         "Content-Type": "application/json"
     }
     payload = {
-    "price_amount": 5.00,
+    "price_amount": 1.00,
     "price_currency": "usd",
     "pay_currency": "usdtmatic",
     "is_fixed_rate": False,
