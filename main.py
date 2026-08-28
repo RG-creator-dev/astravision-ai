@@ -167,14 +167,15 @@ def create_payment_web():
         "Content-Type": "application/json"
     }
     payload = {
-        "price_amount": 50.00,
-        "price_currency": "usd",
-        "is_fixed_rate": False,
-        "order_description": "AstraVisión AI - Acceso Ilimitado",
-        "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
-        "success_url": "https://t.me/astravision_ai_bot",
-        "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/"
-    }
+    "price_amount": 5.00,
+    "price_currency": "usd",
+    "pay_currency": "usdtmatic",
+    "is_fixed_rate": False,
+    "order_description": "AstraVisión AI - Acceso Ilimitado",
+    "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
+    "success_url": "https://t.me/astravision_ai_bot",
+    "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/"
+}
     
     try:
         res = requests.post(url, json=payload, headers=headers)
