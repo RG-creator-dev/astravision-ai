@@ -66,7 +66,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error en Supabase start: {e}")
 
-    mensaje = f"✨ ¡Bienvenido a AstraVisión AI, {first_name}! ✨\n\nEnvíame una fotografía clara de la palma de tu mano y revelaré las líneas de tu destino."
+    mensaje = f"✨ ¡Bienvenido a AstraVisión AI, {first_name}! ✨\n\nSoy tu guía místico digital. Tengo el poder de interpretar las señales ocultas en tu destino a través de dos artes milenarias:
+
+1️⃣ **Lectura de la Palma:** Para comenzar, envíame una fotografía clara y bien iluminada de la palma de tu mano (derecha o izquierda, la que desees consultar). Mis algoritmos revelarán lo que dicen tus líneas.
+
+2️⃣ **Lectura del Café (Taseografía):** Si prefieres la sabiduría de la borra del café, envíame una foto nítida de los sedimentos en el fondo de tu taza.
+
+¡Desbloquea los misterios de tu futuro ahora! Envía tu foto para la primera lectura por solo $1.00 USD. ✨'''."
     await update.message.reply_text(mensaje)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
