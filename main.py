@@ -66,14 +66,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error en Supabase start: {e}")
 
-    mensaje = f"✨ ¡Bienvenido a AstraVisión AI, {first_name}! ✨\n\nSoy tu guía místico digital. Tengo el poder de interpretar las señales ocultas en tu destino a través de dos artes milenarias:
+    mensaje = f"""✨ ¡Bienvenido a AstraVisión AI, {first_name}! ✨
+
+Soy tu guía místico digital. Tengo el poder de interpretar las señales ocultas en tu destino a través de dos artes milenarias:
 
 1️⃣ **Lectura de la Palma:** Para comenzar, envíame una fotografía clara y bien iluminada de la palma de tu mano (derecha o izquierda, la que desees consultar). Mis algoritmos revelarán lo que dicen tus líneas.
 
 2️⃣ **Lectura del Café (Taseografía):** Si prefieres la sabiduría de la borra del café, envíame una foto nítida de los sedimentos en el fondo de tu taza.
 
-¡Desbloquea los misterios de tu futuro ahora! Envía tu foto para la primera lectura por solo $1.00 USD. ✨'''."
-    await update.message.reply_text(mensaje)
+¡Desbloquea los misterios de tu futuro ahora! Envía tu foto para la primera lectura por solo $1.00 USD. ✨"""
+    
+    await update.message.reply_text(mensaje, parse_mode="Markdown")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -101,16 +104,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Has agotado tus lecturas disponibles.\n\nAdquiere acceso ilimitado o recarga créditos en nuestra web para continuar.")
         return
 
-    await update.message.reply_text("🔮 *Analizando los trazos místicos de tu mano...*", parse_mode="Markdown")
+    await update.message.reply_text("🔮 *Analizando los trazos místicos...*", parse_mode="Markdown")
 
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
     image = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
-        "Eres AstraVisión AI, un bot místico experto en quiromancia. Analiza esta imagen de una mano y realiza "
-        "una lectura mística detallada, profunda y reveladora sobre el destino, salud, amor y fortuna. "
-        "Usa emojis, tono místico y positivo."
+        "Eres AstraVisión AI, un bot místico experto en quiromancia y taseografía (lectura del café). "
+        "Analiza esta imagen (palma de la mano o taza de café) y realiza una lectura mística detallada, profunda y "
+        "reveladora sobre el destino, salud, amor y fortuna. Usa emojis, tono místico y positivo."
     )
 
     respuesta_texto = None
@@ -173,15 +176,15 @@ def create_payment_web():
         "Content-Type": "application/json"
     }
     payload = {
-    "price_amount": 1.00,
-    "price_currency": "usd",
-    "pay_currency": "usdtmatic",
-    "is_fixed_rate": False,
-    "order_description": "AstraVisión AI - Acceso Ilimitado",
-    "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
-    "success_url": "https://t.me/astravision_ai_bot",
-    "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/"
-}
+        "price_amount": 1.00,
+        "price_currency": "usd",
+        "pay_currency": "usdtmatic",
+        "is_fixed_rate": False,
+        "order_description": "AstraVisión AI - Acceso Ilimitado",
+        "ipn_callback_url": "https://astravision-ai.onrender.com/nowpayments-ipn",
+        "success_url": "https://t.me/astravision_ai_bot",
+        "cancel_url": "https://rg-creator-dev.github.io/astravision-ai/"
+    }
     
     try:
         res = requests.post(url, json=payload, headers=headers)
