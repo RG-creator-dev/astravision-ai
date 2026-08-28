@@ -167,7 +167,7 @@ def create_payment_web():
         "Content-Type": "application/json"
     }
     payload = {
-        "price_amount": 6.50,
+        "price_amount": 50.00,
         "price_currency": "usd",
         "is_fixed_rate": False,
         "order_description": "AstraVisión AI - Acceso Ilimitado",
